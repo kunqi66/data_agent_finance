@@ -18,6 +18,51 @@ from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from app.core.log import logger
 
 
+from datetime import timedelta, date, datetime
+from decimal import Decimal
+
+def convert_mysql_value(v):
+    if isinstance(v, timedelta):
+        # 处理TIME字段，支持微秒
+        total_sec = int(v.total_seconds())
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        if v.microseconds:
+            return f"{h:02d}:{m:02d}:{s:02d}.{v.microseconds:06d}"
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    elif isinstance(v, (datetime, date)):
+        return v.isoformat()
+    elif isinstance(v, Decimal):
+        return str(v) # 保留高精度，不要直接float
+    elif isinstance(v, bytes):
+        import base64
+        return base64.b64encode(v).decode("utf-8")
+    else:
+        return v
+
+from decimal import Decimal
+
+def convert_for_json_field(obj):
+    """递归处理对象，用于MySQL JSON字段，把不可序列化类型转为字符串"""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    elif isinstance(obj, timedelta):
+        total_sec = int(obj.total_seconds())
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    elif isinstance(obj, Decimal):
+        return str(obj)
+    elif isinstance(obj, list):
+        return [convert_for_json_field(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_for_json_field(v) for k, v in obj.items()}
+    else:
+        return obj
+
+
 EMBED_SEM = asyncio.Semaphore(4)
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -56,16 +101,16 @@ class MetaKnowledgeService:
             column_infos = await self._save_table_infos_to_meta(config.tables)
             logger.info("保存表信息和字段信息到meta库成功")
 
-            # await self._save_column_infos_values_to_qdrant(column_infos)
-            # logger.info("生成向量并保存，保存列信息字段到qdrant成功")
+            await self._save_column_infos_values_to_qdrant(column_infos)
+            logger.info("生成向量并保存，保存列信息字段到qdrant成功")
             await self._save_column_values_to_es(column_infos,config.tables)
             logger.info("es建立全文索引库成功")
-        # if config.metrics:
-            # metric_infos : list[MetricInfoMySQL] = await self._save_metric_infos_to_meta_db(config.metrics)
-            # logger.info("保存指标信息到meta库成功")
+        if config.metrics:
+            metric_infos : list[MetricInfoMySQL] = await self._save_metric_infos_to_meta_db(config.metrics)
+            logger.info("保存指标信息到meta库成功")
             
-            # await self._save_metric_infos_to_qdrant(metric_infos)
-            # logger.info("保存指标信息到qdrant向量库成功")
+            await self._save_metric_infos_to_qdrant(metric_infos)
+            logger.info("保存指标信息到qdrant向量库成功")
         
         
     async def _save_table_infos_to_meta(self, tables: list[Table]) -> list[ColumnInfoMySQL]:
@@ -85,13 +130,13 @@ class MetaKnowledgeService:
             
             for column in table.columns:
                 examples : list = await self.finance_mysql_repo.get_column_values(table_info.name, column.name)
-            
+                examples_safe = convert_for_json_field(examples)
                 column_info = ColumnInfoMySQL(
                     id=f"{table.name}.{column.name}",
                     name=column.name,
                     type=column_type_dict[column.name],  # 需要检查表中字段类型
                     role=column.role,
-                    examples=examples, # 需要查表
+                    examples=examples_safe, # 需要查表
                     description=column.description,
                     alias=column.alias,
                     table_id=table_info.id
@@ -164,7 +209,14 @@ class MetaKnowledgeService:
             if sync:
                 # 查询dw库得到字段的所有值，对每个值，创建一个valueInfoES对象封装相关信息数据  value_infos:list[valueInfoES]
                 values = await self.finance_mysql_repo.get_column_values(column_info.table_id, column_info.name, 100)
+                
+                
+                
+                
                 for value in values:
+                    
+                    value = convert_mysql_value(value)
+                    
                     value_infos.append(ValueInfoES(
                         id=f"{column_info.id}.{value}",
                         value=value,

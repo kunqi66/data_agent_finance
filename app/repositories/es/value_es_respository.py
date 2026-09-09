@@ -24,12 +24,12 @@ class ValueESRepository:
     async def _create_index(self):
         client = self.client
         index_name = self.index_name
-        if await client.indices.exists(index=index_name):
-            await client.indices.delete(index=index_name)
-        await client.indices.create(
-            index=index_name,
-            mappings=self.mapping,
-        )
+        
+        if not await client.indices.exists(index= index_name):
+            await client.indices.create(
+                index=index_name,
+                mappings=self.mapping,
+            )
         
         
     async def insert_values(self, values: list[ValueInfoES]):
