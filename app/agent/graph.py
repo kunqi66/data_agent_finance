@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
         try:
             # 2. 创建state对象
-            state = DataAgentState(query="华北地区销售总额")
+            state = DataAgentState(query="有哪些用户")
 
             # 3. 创建context对象
             async with (finance_mysql_client_manager.session_factory() as dw_session,
